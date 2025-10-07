@@ -4,19 +4,19 @@
     <Piece NumberOfPoints="600" NumberOfVerts="600" NumberOfLines="0" NumberOfStrips="0" NumberOfPolys="0">
       <PointData>
         <DataArray type="Float32" Name="normal_x" format="binary" RangeMin="-1" RangeMax="1">
-          AQAAAACAAABgCQAAMwEAAA==eAGVjdGJxDAUA9OZW9vO3NrtcB4Q4jmwHw9JIzl5ns96/m+H4s326Bvrjtxs1T/IuWmfObdylc6DeTIUZm5P7mM77eTuyR5Mr97YxHkDn647sixV3rp/2LPN41tm/aSw5Jl3faN33ZNzM/Uydr2Vyff5v1mFtyd72TfLzC63k3eP2ifTZ4c3v6m73OjX+YY5Fe+tr+fIKt4My7NT6fCt9tklk694r7/t6D02+NTJs3GXvUy1I3uw5Jn16rps7dXcwTKn747s5Q5vnnpY9nq1e7LHhiPrM8vR9snW8H7a33Zu6fWoHs7JmttNmqx95n3+AWtu1+pu4nTTsc29nm17s+rGjL4d+z72Mn0rvaw92XOD5tGb08PIMr26o8NnZpO5PVm2jjdnl4wd131u2u8/aztTxw==
+          AQAAAACAAABgCQAAMQEAAA==eAGFjtGJxUAQw9LZtnadvdYO3YtADLPch7FH9oY8z895vvq87q3LcbV1Zey48WaYKjfTzcx9Y+Unu75xo7NDvZu3jt5N3XzSk5U9rtq1n7z7uWvHO28dpmBkvJLpdOSp/zj9FN/wnS7jLtu4m+7MW3fGP3Ar9lue7LbbOEyd9/u9zTi9t1mXT29v1tmSp+BbJ9fP+3be8Ml6k28beZ2sPuPb3HbTtw4m18/7DbuNbxv3dGZdpsObucvs9NnJdXo3MLk+u8nt9fZl8IpOlZtnx21Xd3fzbrfMOzm5kut2vckbl+FsbrLX2ZGVN67sNu+G7EZeb0emK+Muu3XdNbvX2zXTc+OKW3ZzttsOXrmZzkZGruQ4XCcr2Mbpb5173a0Orybnlt3yWf4L9vfuF+BJU8c=
         </DataArray>
         <DataArray type="Float32" Name="area" format="binary" RangeMin="0.003328750841319561" RangeMax="0.0033379285596311092">
-          AQAAAACAAABgCQAAIAEAAA==eAGNzstNBVEMA9BuYPM6oBO6pTNeFkdYVjJiMfI3vvP6/P56vb+Pnz8cTk/me/I6uza8pQ/5+VZmmfOhG53xO0vdXD/Rlm0ZP3V2cDg9HG63nenAyfHB7Mt4G7ppvLr9Fp1vXVt8225h+skzt5HYeertv/6z3ftuYObtpc5/ubj+oN308Mx6K2/1dKCOvDVfH/b7fH05zFxnw+zlv7Qvu/ZtyyE/cePZz3z81Li+PP3hNA713fMbszdZ6uSd5U72htM6dOO1qeceji/DU+de897o+62fHe/0Tt/lja5OZzYTn3hmvUl78+pu+XSvr/veyX1cBjff3obbP/SWzcQnnpu2+m33W+5eRruBNulG93pwerrd4SfiV7f90b+0Nsr/
+          AQAAAACAAABgCQAAIQEAAA==eAGNzstNBUEQQ9FsYPMyIBOyJTMooSNdlboZFiO7/Ot5vX9+vH6+t69fHN6PPujj16tWvVxmsDpeHR9v+7Tq8pC3cXyZEz953qtXrbrNarL+heeG1XVoG586kz91brvd022/WnV7xe3r7sxNP+VGs8vXf9LlbLj1iv/h3u8eTf9086DMxvo4nOzw/dm46dvf92m/meG3DL043GenG7yNMtX1R9s+76TbaAa35dYvbi6ru7H5vi3X/s2nw3Zu+83oFfn69Ybz6U85+Y36N+zuU5dvS/ek02R0NvLh+Ltbb/vNNofz97vdwaGujg1Il3e3J1v8K2dLfmdtF3FdaAPa2rj78tVtwlOmGu4tN7QDR8d1inza3uFX39lmxvsGC6DK/w==
         </DataArray>
-        <DataArray type="Float32" Name="B" format="binary" RangeMin="0.04576176404953003" RangeMax="0.04576176404953003">
-          AQAAAACAAABgCQAAJgAAAA==eAHbUGBtu2EUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGACzRvG4=
+        <DataArray type="Float32" Name="B" format="binary" RangeMin="0.050123319029808044" RangeMax="0.050123319029808044">
+          AQAAAACAAABgCQAAJgAAAA==eAGT8fO1lRnFo2EwmgZG08BoGhhNA6NpYDQNjKYBqqUBAPuPO/8=
         </DataArray>
-        <DataArray type="Float32" Name="R" format="binary" RangeMin="-0.000005037873052060604" RangeMax="-0.000005037873052060604">
-          AQAAAACAAABgCQAAJgAAAA==eAFj4F65jWEUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAG6QUJ4=
+        <DataArray type="Float32" Name="R" format="binary" RangeMin="0.000036977988202124834" RangeMax="0.000036977988202124834">
+          AQAAAACAAABgCQAAJgAAAA==eAG7ICFtcWEUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAAnn4mc=
         </DataArray>
-        <DataArray type="Float32" Name="E" format="binary" RangeMin="-0.000023115193471312523" RangeMax="-0.000023115193471312523">
-          AQAAAACAAABgCQAAJwAAAA==eAFreH5we8MoHg2D0TQwmgZG08BoGhhNA6NpYDQNUC0NAACewbsD
+        <DataArray type="Float32" Name="E" format="binary" RangeMin="-0.0000671511807013303" RangeMax="-0.0000671511807013303">
+          AQAAAACAAABgCQAAJgAAAA==eAFrudyzo2UUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAEKEG6M=
         </DataArray>
         <DataArray type="Float32" Name="true_B" format="binary" RangeMin="0.05000000074505806" RangeMax="0.05000000074505806">
           AQAAAACAAABgCQAAJwAAAA==eAE7e8bH9uwoHg2D0TQwmgZG08BoGhhNA6NpYDQNUC0NAAACU//t
@@ -27,23 +27,23 @@
         <DataArray type="Float32" Name="true_E" format="binary" RangeMin="0" RangeMax="0">
           AQAAAACAAABgCQAAIgAAAA==eAFjYBgFoyEwGgKjITAaAqMhMBoCoyEwGgLUDAEACWAAAQ==
         </DataArray>
-        <DataArray type="Float32" Name="pred_B" format="binary" RangeMin="0.04576176404953003" RangeMax="0.04576176404953003">
-          AQAAAACAAABgCQAAJgAAAA==eAHbUGBtu2EUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGACzRvG4=
+        <DataArray type="Float32" Name="pred_B" format="binary" RangeMin="0.050123319029808044" RangeMax="0.050123319029808044">
+          AQAAAACAAABgCQAAJgAAAA==eAGT8fO1lRnFo2EwmgZG08BoGhhNA6NpYDQNjKYBqqUBAPuPO/8=
         </DataArray>
-        <DataArray type="Float32" Name="pred_R" format="binary" RangeMin="-0.000005037873052060604" RangeMax="-0.000005037873052060604">
-          AQAAAACAAABgCQAAJgAAAA==eAFj4F65jWEUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAG6QUJ4=
+        <DataArray type="Float32" Name="pred_R" format="binary" RangeMin="0.000036977988202124834" RangeMax="0.000036977988202124834">
+          AQAAAACAAABgCQAAJgAAAA==eAG7ICFtcWEUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAAnn4mc=
         </DataArray>
-        <DataArray type="Float32" Name="pred_E" format="binary" RangeMin="-0.000023115193471312523" RangeMax="-0.000023115193471312523">
-          AQAAAACAAABgCQAAJwAAAA==eAFreH5we8MoHg2D0TQwmgZG08BoGhhNA6NpYDQNUC0NAACewbsD
+        <DataArray type="Float32" Name="pred_E" format="binary" RangeMin="-0.0000671511807013303" RangeMax="-0.0000671511807013303">
+          AQAAAACAAABgCQAAJgAAAA==eAFrudyzo2UUj4bBaBoYTQOjaWA0DYymgdE0MJoGqJYGAEKEG6M=
         </DataArray>
-        <DataArray type="Float32" Name="lambda_B" format="binary" RangeMin="1" RangeMax="1">
-          AQAAAACAAABgCQAAJgAAAA==eAFjYGiwZxjFo2EwmgZG08BoGhhNA6NpYDQNjKYBqqUBAFQmv7g=
+        <DataArray type="Float32" Name="lambda_B" format="binary" RangeMin="100" RangeMax="100">
+          AQAAAACAAABgCQAAJgAAAA==eAFjYDjhxDCKR8NgNA2MpoHRNDCaBkbTwGgaGE0DVEsDAHbmb48=
         </DataArray>
-        <DataArray type="Float32" Name="lambda_R" format="binary" RangeMin="1" RangeMax="1">
-          AQAAAACAAABgCQAAJgAAAA==eAFjYGiwZxjFo2EwmgZG08BoGhhNA6NpYDQNjKYBqqUBAFQmv7g=
+        <DataArray type="Float32" Name="lambda_R" format="binary" RangeMin="100" RangeMax="100">
+          AQAAAACAAABgCQAAJgAAAA==eAFjYDjhxDCKR8NgNA2MpoHRNDCaBkbTwGgaGE0DVEsDAHbmb48=
         </DataArray>
-        <DataArray type="Float32" Name="lambda_E" format="binary" RangeMin="1" RangeMax="1">
-          AQAAAACAAABgCQAAJgAAAA==eAFjYGiwZxjFo2EwmgZG08BoGhhNA6NpYDQNjKYBqqUBAFQmv7g=
+        <DataArray type="Float32" Name="lambda_E" format="binary" RangeMin="100" RangeMax="100">
+          AQAAAACAAABgCQAAJgAAAA==eAFjYDjhxDCKR8NgNA2MpoHRNDCaBkbTwGgaGE0DVEsDAHbmb48=
         </DataArray>
       </PointData>
       <CellData>
