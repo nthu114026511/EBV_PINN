@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from sympy import Symbol, Number, Function, StrictLessThan, sqrt
 from physicsnemo.sym.eq.pde import PDE
 
@@ -34,7 +35,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ========== 統一物理參數定義 ==========
     # 時間縮放參數
     t_0 = 0.0      # 原始時間起點
-    t_f = 200.0    # 原始時間終點
+    t_f = 60.0     # 原始時間終點（根據 CSV 數據範圍）
     time_scale = t_f - t_0  # 縮放因子
     
     # ODE 參數
@@ -140,89 +141,53 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     )
     domain.add_constraint(interior_late, "interior_late")
 
-    # add validation data
-    total_point = 10000 
-    X_flat = np.linspace(0, 1.0, total_point)[:, None]  # total_point points in scaled time t_s ∈ [0, 1]
+    # ========== 讀取 CSV 數據作為 Data Loss ==========
+    print("Loading training data from CSV...")
+    csv_path = "evb_training_data.csv"
+    df = pd.read_csv(csv_path)
     
-    # Exact analytical solution
-    from scipy.integrate import cumulative_trapezoid
+    # CSV 欄位：t, B, R, E
+    # t 是原始時間 [0, 200]，需要轉換為縮放時間 t_s ∈ [0, 1]
+    t_original = df['t'].values
+    t_scaled = (t_original - t_0) / (t_f - t_0)  # 轉換為 [0, 1]
     
-    # 使用統一定義的參數
-    r = r_param
-    K = K_param
-    sigma0 = sigma0_param
-    k12 = k12_param
-    kc = kc_param
+    # 取得對應的 B, R, E 數值
+    B_csv = df['B'].values
+    R_csv = df['R'].values
+    E_csv = df['E'].values
     
-    # Calculate constant c from initial condition: B0 = K / (1 + c)
-    c = (K - B0) / B0
+    # 準備數據格式
+    X_flat = t_scaled[:, None]  # shape=(n_points, 1)
+    B_true = B_csv[:, None]     # shape=(n_points, 1)
+    R_true = R_csv[:, None]     # shape=(n_points, 1)
+    E_true = E_csv[:, None]     # shape=(n_points, 1)
     
-    # 將縮放時間 t_s 轉換回原始時間 t
-    t_s = X_flat.flatten()  # scaled time array [0, 1]
-    T = t_0 + t_s * (t_f - t_0)  # original time array [t_0, t_f]
-    
-    # Helper function: F_alpha(t, alpha) = ∫_0^t e^{alpha*s} * B(s) ds
-    def F_alpha(t, alpha, r, K, c):
-        """
-        Compute ∫_0^t exp(alpha*s) * B(s) ds where B(s) = K/(1 + c*exp(-r*s))
-        """
-        # B(s) = K / (1 + c*exp(-r*s))
-        # ∫ exp(alpha*s) * K/(1 + c*exp(-r*s)) ds
-        
-        # For numerical stability, we compute this integral numerically
-        result = np.zeros_like(t)
-        for i, ti in enumerate(t):
-            if ti == 0:
-                result[i] = 0.0
-            else:
-                s_vals = np.linspace(0, ti, 500)
-                B_vals = K / (1.0 + c * np.exp(-r * s_vals))
-                integrand = np.exp(alpha * s_vals) * B_vals
-                result[i] = np.trapz(integrand, s_vals)
-        return result
-    
-    # ---------- Exact solution (vectorized) ----------
-    B_ex = K / (1.0 + c * np.exp(-r * T))                       # logistic
-    
-    Fk12 = F_alpha(T, k12, r, K, c)                              # ∫_0^t e^{k12 s} B(s) ds
-    R_ex = np.exp(-k12 * T) * (R0 + sigma0 * Fk12)
-    
-    if not np.isclose(kc, k12, atol=1e-12):
-        Fkc  = F_alpha(T, kc, r, K, c)
-        E_ex = (np.exp(-kc * T) * E0
-                + (k12 / (kc - k12)) * (np.exp(-k12 * T) - np.exp(-kc * T)) * R0
-                + sigma0 * (k12 / (kc - k12)) * (np.exp(-k12 * T) * Fk12 - np.exp(-kc * T) * Fkc))
-    else:
-        # kc == k12 = k 的極限式：E(t) = e^{-k t}[ E0 + k ∫_0^t e^{k s} R(s) ds ]
-        k = kc
-        Fk = F_alpha(T, k, r, K, c)
-        # ∫_0^t e^{k s} R(s) ds = t*R0 + sigma0 ∫_0^t F_k(s) ds
-        Gk = cumulative_trapezoid(Fk, T, initial=0.0)
-        E_ex = np.exp(-k * T) * (E0 + k * (T * R0 + sigma0 * Gk))
-    
-    B_true = B_ex[:, None]  # shape=(total_point, 1)
-    R_true = R_ex[:, None]  # shape=(total_point, 1)
-    E_true = E_ex[:, None]  # shape=(total_point, 1)
+    print(f"Loaded {len(df)} data points from CSV")
+    print(f"Time range: t ∈ [{t_original.min():.2f}, {t_original.max():.2f}]")
+    print(f"Scaled time range: t_s ∈ [{t_scaled.min():.4f}, {t_scaled.max():.4f}]")
     
     # Build invar and outvar
     invar_numpy = {   # dict of input variables
-        "x": X_flat,  # shape=(total_point, 1)
+        "x": X_flat,  # shape=(n_points, 1)
     }
     outvar_numpy = {  # dict of output variables
-        "B": B_true,  # shape=(total_point, 1)
-        "R": R_true,  # shape=(total_point, 1)
-        "E": E_true,  # shape=(total_point, 1)
+        "B": B_true,  # shape=(n_points, 1)
+        "R": R_true,  # shape=(n_points, 1)
+        "E": E_true,  # shape=(n_points, 1)
     }
 
     _plotter = None
     if cfg.run_mode == 'eval':
         _plotter = CustomValidatorPlotter()
 
+    # 使用 CSV 數據點數量作為 batch_size
+    n_data_points = len(X_flat)
+    
     validator = PointwiseValidator(
         nodes=nodes, 
         invar=invar_numpy, 
         true_outvar=outvar_numpy, 
-        batch_size=10000,
+        batch_size=min(n_data_points, 1000),  # 使用較小的 batch size 以避免內存問題
         plotter=_plotter,
     )
 
