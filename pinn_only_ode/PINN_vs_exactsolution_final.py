@@ -34,7 +34,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ========== 統一物理參數定義 ==========
     # 時間縮放參數
     t_0 = 0.0      # 原始時間起點
-    t_f = 200.0    # 原始時間終點
+    t_f = 60.0     # 原始時間終點
     time_scale = t_f - t_0  # 縮放因子
     
     # ODE 參數

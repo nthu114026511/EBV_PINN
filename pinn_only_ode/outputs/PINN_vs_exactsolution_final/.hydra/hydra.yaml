@@ -109,18 +109,18 @@ hydra:
   runtime:
     version: 1.3.2
     version_base: '1.1'
-    cwd: /workspace/GoGo
+    cwd: /workspace/EBV_PINN/pinn_only_ode
     config_sources:
     - path: hydra.conf
       schema: pkg
       provider: hydra
-    - path: /workspace/GoGo/conf
+    - path: /workspace/EBV_PINN/pinn_only_ode/conf
       schema: file
       provider: main
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /workspace/GoGo/outputs/PINN_vs_exactsolution_final
+    output_dir: /workspace/EBV_PINN/pinn_only_ode/outputs/PINN_vs_exactsolution_final
     choices:
       loss: sum
       optimizer: adam

@@ -23,4 +23,5 @@ training:
 batch_size:
   IC: 600
   interior: 6000
+  data: 64
   

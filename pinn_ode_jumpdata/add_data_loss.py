@@ -18,6 +18,27 @@ from physicsnemo.sym.key import Key
 import time
 from custom_plotter import CustomValidatorPlotter
 
+# ========== 訓練配置參數 ==========
+# 這些參數可以根據需要調整以優化訓練效果
+CONFIG = {
+    # Lambda weighting - 控制各約束的相對重要性
+    'lambda_weighting': {
+        'IC': 100.0,      # 初始條件權重（越大越嚴格滿足初始條件）
+        'ode_B': 1.0,     # B 方程殘差權重
+        'ode_R': 5.0,     # R 方程殘差權重（提高以平衡變化較小的變量）
+        'ode_E': 5.0,     # E 方程殘差權重（提高以平衡變化較小的變量）
+        'data_B': 10.0,   # CSV 數據擬合權重 - B
+        'data_R': 10.0,   # CSV 數據擬合權重 - R  
+        'data_E': 10.0,   # CSV 數據擬合權重 - E
+    },
+    # Interior sampling - 控制內點採樣策略
+    'interior_sampling': {
+        'early_fraction': 0.7,  # 前期區域採樣比例（0-1）
+        'early_cutoff': 0.3,    # 前期/後期分界點（0-1）
+    },
+}
+# =====================================
+
 # ODE (原始):
 #   dB/dt = r * B * (1 - B/K)
 #   dR/dt = sigma0 * B - k12 * R
@@ -35,7 +56,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ========== 統一物理參數定義 ==========
     # 時間縮放參數
     t_0 = 0.0      # 原始時間起點
-    t_f = 60.0     # 原始時間終點（根據 CSV 數據範圍）
+    t_f = 60.0     # 原始時間終點（根據 CSV 數據範圍：0 到 60）
     time_scale = t_f - t_0  # 縮放因子
     
     # ODE 參數
@@ -49,6 +70,31 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     B0 = 0.05
     R0 = 0.0
     E0 = 0.0
+    
+    # ========== 從全局配置讀取參數 ==========
+    IC_weight = CONFIG['lambda_weighting']['IC']
+    ode_B_weight = CONFIG['lambda_weighting']['ode_B']
+    ode_R_weight = CONFIG['lambda_weighting']['ode_R']
+    ode_E_weight = CONFIG['lambda_weighting']['ode_E']
+    data_B_weight = CONFIG['lambda_weighting']['data_B']
+    data_R_weight = CONFIG['lambda_weighting']['data_R']
+    data_E_weight = CONFIG['lambda_weighting']['data_E']
+    
+    early_fraction = CONFIG['interior_sampling']['early_fraction']
+    early_cutoff = CONFIG['interior_sampling']['early_cutoff']
+    
+    # Data batch size 從 Hydra 配置讀取
+    data_batch_size = getattr(cfg.batch_size, 'data', 64)
+    
+    print(f"\n{'='*60}")
+    print(f"Configuration Summary:")
+    print(f"{'='*60}")
+    print(f"Lambda Weights - IC: {IC_weight}")
+    print(f"               - ODE: B={ode_B_weight}, R={ode_R_weight}, E={ode_E_weight}")
+    print(f"               - Data: B={data_B_weight}, R={data_R_weight}, E={data_E_weight}")
+    print(f"Interior Sampling - early_fraction: {early_fraction}, early_cutoff: {early_cutoff}")
+    print(f"Batch Sizes - IC: {cfg.batch_size.IC}, interior: {cfg.batch_size.interior}, data: {data_batch_size}")
+    print(f"{'='*60}\n")
     # ========================================
     
     class CustomODE(PDE):
@@ -73,6 +119,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             R_scale = K * s0 / k12
             E_scale = K * s0 / kc
             
+            # 使用固定尺度相對誤差（適度歸一化，避免訓練初期過度放大）
             self.equations = {
                 "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2),
                 "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2 + R_scale**2),
@@ -98,27 +145,29 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # domain
     domain = Domain()
 
-    # 1) IC 權重放大
+    # 1) IC 權重從配置讀取
     IC = PointwiseBoundaryConstraint(
         nodes=nodes,
         geometry=geo,
         outvar={"B": B0, "R": R0, "E": E0},
-        lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},  # ★IC 強化
+        lambda_weighting={"B": IC_weight, "R": IC_weight, "E": IC_weight},
         batch_size=cfg.batch_size.IC,
         parameterization={x: 0.0},
     )
     domain.add_constraint(IC, "IC")
 
-    # 2) 內點殘差配重（R/E 比 B 重），並偏重前期區間
-    wB, wR, wE = 1.0, 5.0, 5.0
+    # 2) 內點殘差配重從配置讀取，並偏重前期區間
+    wB = ode_B_weight
+    wR = ode_R_weight
+    wE = ode_E_weight
 
     # 確保 batch_size 整數劃分正確
     interior_total = cfg.batch_size.interior
-    interior_early_size = int(0.7 * interior_total)
+    interior_early_size = int(early_fraction * interior_total)
     interior_late_size = interior_total - interior_early_size  # 確保總和正確
 
-    # 2a. 前期內點（x < 0.3）
-    criteria_early = StrictLessThan(x, 0.3)
+    # 2a. 前期內點（x < early_cutoff）
+    criteria_early = StrictLessThan(x, early_cutoff)
     interior_early = PointwiseInteriorConstraint(
         nodes=nodes,
         geometry=geo,
@@ -143,7 +192,9 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # ========== 讀取 CSV 數據作為 Data Loss ==========
     print("Loading training data from CSV...")
-    csv_path = "evb_training_data.csv"
+    import os
+    # 使用絕對路徑，避免 Hydra 改變工作目錄後找不到檔案
+    csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data.csv")
     df = pd.read_csv(csv_path)
     
     # CSV 欄位：t, B, R, E
@@ -176,22 +227,63 @@ def run(cfg: PhysicsNeMoConfig) -> None:
         "E": E_true,  # shape=(n_points, 1)
     }
 
+    # ========== 添加 CSV 數據作為訓練約束 ==========
+    # 使用 PointwiseConstraint 將 CSV 數據添加為訓練約束
+    # 這樣數據會參與梯度下降，而不只是用於驗證
+    
+    import torch
+    from physicsnemo.sym.domain.constraint.continuous import PointwiseConstraint
+    from physicsnemo.sym.dataset.continuous import DictPointwiseDataset
+    
+    # 創建數據集
+    dataset = DictPointwiseDataset(
+        invar=invar_numpy,
+        outvar=outvar_numpy,
+        lambda_weighting={
+            "B": np.full((len(X_flat), 1), data_B_weight),
+            "R": np.full((len(X_flat), 1), data_R_weight),
+            "E": np.full((len(X_flat), 1), data_E_weight),
+        },
+    )
+    
+    # 創建數據約束
+    from physicsnemo.sym.loss import PointwiseLossNorm
+    
+    data_constraint = PointwiseConstraint(
+        nodes=nodes,
+        dataset=dataset,
+        batch_size=data_batch_size,
+        loss=PointwiseLossNorm(),  # 使用標準點式損失
+        shuffle=True,  # 打亂數據順序
+        drop_last=True,  # 使用 CUDA graphs 時必須為 True
+        num_workers=0,  # 避免多進程問題
+    )
+    domain.add_constraint(data_constraint, "data_constraint")
+    print(f"✓ Added {len(df)} data points as training constraint (participates in gradient descent)")
+    print(f"  Data constraint batch size: {data_batch_size}")
+    print(f"  Data weights - B: {data_B_weight}, R: {data_R_weight}, E: {data_E_weight}")
+
+
+
+
+
+    
+    # ========== 驗證器 ==========
     _plotter = None
     if cfg.run_mode == 'eval':
         _plotter = CustomValidatorPlotter()
 
-    # 使用 CSV 數據點數量作為 batch_size
-    n_data_points = len(X_flat)
-    
+    # 使用所有數據點進行驗證（不使用 batch）
     validator = PointwiseValidator(
         nodes=nodes, 
         invar=invar_numpy, 
         true_outvar=outvar_numpy, 
-        batch_size=min(n_data_points, 1000),  # 使用較小的 batch size 以避免內存問題
+        batch_size=len(X_flat),  # 驗證時使用所有數據點
         plotter=_plotter,
     )
 
     domain.add_validator(validator)
+    print(f"✓ Added validator with {len(X_flat)} data points (for monitoring only)\n")
 
     # make solver
     slv = Solver(cfg, domain)
