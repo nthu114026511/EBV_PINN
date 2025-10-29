@@ -1,6 +1,7 @@
 import numpy as np
-from sympy import Symbol, Number, Function, StrictLessThan, sqrt
+from sympy import Symbol, Number, Function, StrictLessThan, sqrt, exp, log
 from physicsnemo.sym.eq.pde import PDE
+from typing import Sequence
 
 import physicsnemo.sym
 from physicsnemo.sym.hydra import instantiate_arch, PhysicsNeMoConfig
@@ -43,6 +44,16 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     sigma0_param = 0.01 # B → R rate
     k12_param = 0.05    # R → E rate
     kc_param = 0.15     # E decay rate
+
+    # 事件與硬約束
+    t_js_original = (10.0, 20.0, 40.0)  # 原始時間（單位：天）
+    t_js: Sequence[float] = tuple((t - t_0) / time_scale for t in t_js_original)  # 轉換為縮放時間 [0, 1]
+    d_js: Sequence[float] = (1.5, 1.5, 1.5)  # 劑量序列
+    alpha: float = 0.30  # SF = exp(-alpha*d - beta*d^2)
+    beta: float = 0.03
+    sigma1: float = 0.20
+    kappa: float = 80.0
+    mask_eps = 0.01  # ε：遮罩半寬
     
     # 初始條件
     B0 = 0.05
@@ -51,20 +62,58 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ========================================
     
     class CustomODE(PDE):
-        def __init__(self, r=0.10, K=5.0, sigma0=0.01, k12=0.05, kc=0.15, time_scale=1.0):
+        def __init__(self, r, K, sigma0, k12, kc, time_scale,
+                     t_js, d_js, alpha, beta, sigma1, kappa, mask_eps):
             x = Symbol("x")
             input_variables = {"x": x}
-            B = Function("B")(*input_variables)
-            R = Function("R")(*input_variables)
-            E = Function("E")(*input_variables)
+            B_bar = Function("B")(*input_variables)
+            R_bar = Function("R")(*input_variables)
+            E_bar = Function("E")(*input_variables)
 
             r, K, s0, k12, kc, ts = map(Number, (r, K, sigma0, k12, kc, time_scale))
+
+            # 平滑階躍與其導數（供 sympy 使用，實際微分由 diff 完成）
+            kappa_ = Number(kappa)
+            def H_kappa(tau):
+                return 1 / (1 + exp(-kappa_ * tau))
+
+            # 計算生存率 SF_j = exp(-alpha*d_j - beta*d_j^2)
+            alpha_ = Number(alpha)
+            beta_ = Number(beta)
+            SF_list = [exp(-alpha_ * Number(d) - beta_ * Number(d)**2) for d in d_js]
+
+            # M(t) 與非負
+            H_list = [H_kappa(x - Number(tj)) for tj in t_js]
+            logSF  = [log(sf) for sf in SF_list]
+            M = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
+
+            B = M * B_bar
+            R = R_bar + Number(sigma1) * sum(
+                (1 - sf) * B * Hj for sf, Hj in zip(SF_list, H_list)
+            )
+            E = E_bar
 
             eps = Number(1e-8)  # 防止除 0
             # 原始殘差
             resB = B.diff(x) - ts * r * B * (1 - B/K)
             resR = R.diff(x) - ts * (s0 * B - k12 * R)
             resE = E.diff(x) - ts * (k12 * R - kc * E)
+
+            # Step 3: 事件遮罩 w(t)
+            eps_mask = Number(mask_eps)
+            def mask_one(arg):
+                # m_j(t) = 1 - exp(- ( (t - t_j)^2 / (2 eps^2) ))
+                return 1 - exp(- (arg**2) / (2 * eps_mask**2))
+            
+            # 對所有事件點累乘遮罩
+            w = Number(1.0)
+            for tj in t_js:
+                w = w * mask_one(x - Number(tj))
+            
+            # 對殘差施加遮罩
+            resB = w * resB
+            resR = w * resR
+            resE = w * resE
 
             # 相對殘差（使用 sqrt 避免 abs 的梯度問題）
             # 典型尺度：B_scale ~ K, R_scale ~ K*σ₀/k12, E_scale ~ K*σ₀/kc
@@ -78,9 +127,11 @@ def run(cfg: PhysicsNeMoConfig) -> None:
                 "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2 + E_scale**2),
             }
     
-    # Setup PDE (傳入縮放因子)
+    # Setup PDE (傳入所有參數，包括事件參數)
     ode = CustomODE(r=r_param, K=K_param, sigma0=sigma0_param, 
-                    k12=k12_param, kc=kc_param, time_scale=time_scale)
+                    k12=k12_param, kc=kc_param, time_scale=time_scale,
+                    t_js=t_js, d_js=d_js, alpha=alpha, beta=beta,
+                    sigma1=sigma1, kappa=kappa, mask_eps=mask_eps)
 
     # network
     FC = instantiate_arch(        
