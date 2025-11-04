@@ -12,15 +12,16 @@
 % =========================================================
 clear; clc; close all;
 
-%% ---------- Parameters & ICs ----------
-r      = 0.10;
-K      = 1.00;
-sigma0 = 0.30;
-sigma1 = 1.00;     % 被殺的 B 立即轉成 R 的比例
-k12    = 0.20;
-kc     = 0.15;
+%% ---------- Parameters & ICs (aligned with Python PINN_jump_hard.py) ----------
+r      = 0.10;     % logistic growth rate
+K      = 5.00;     % carrying capacity (was 1.0)
+sigma0 = 0.01;     % base transfer rate (was 0.30)
+sigma1 = 0.20;     % fraction of killed B converted to R (was 1.00)
+k12    = 0.05;     % R→E transfer rate (was 0.20)
+kc     = 0.15;     % E clearance rate
 
 B0 = 0.05; R0 = 0.00; E0 = 0.00;
+
 
 %% ---------- LQ parameters & fraction schedule ----------
 alpha  = 0.30;     % 腫瘤 alpha (1/Gy)
@@ -28,14 +29,8 @@ beta   = 0.03;     % 腫瘤 beta  (1/Gy^2)
 
 % 3 個跳躍點（可自行調整）
 %等劑量、指定時刻：
-t_frac = [5; 12; 20];   % 跳躍時刻
-d_frac = [2;  2;  2];   % 對應劑量 (Gy)
-%不同劑量（例如最後一次 boost）：
-%t_frac = [5; 12; 20];
-%d_frac = [2;  2;  4];
-%等間隔三次、每天一照：
-%t_frac = (1:3).';
-%d_frac = 2*ones(3,1);
+t_frac = [10; 20; 40];   % 跳躍時刻 (same as t_js in Python)
+d_frac = [1.5; 1.5; 1.5]; % 劑量 (same as d_js)
 
 
 %% ---------- Global time grid ----------
@@ -62,47 +57,29 @@ disp(struct2table(JumpInfo));
 
 %% ---------- 儲存數據供 Python PINN 訓練使用 ----------
 % 建立輸出資料夾
-output_dir = '../only_ode/data';
+% === Safe output directory creation ===
+base_path = pwd;                      % 當前工作目錄 (print 可查看)
+output_dir = fullfile(base_path, 'data');  % 建立 "data" 子資料夾
+
 if ~exist(output_dir, 'dir')
-    mkdir(output_dir);
+    [status, msg, msgID] = mkdir(output_dir);
+    if ~status
+        error("❌ 無法建立資料夾: %s\n原因: %s", output_dir, msg);
+    end
 end
+
+% === Save CSV ===
+data_table = table(T, B, R, E, 'VariableNames', {'t', 'B', 'R', 'E'});
+csv_filename = fullfile(output_dir, 'evb_training_data.csv');
+writetable(data_table, csv_filename);
+fprintf('✓ CSV 數據已儲存至: %s\n', csv_filename);
+
 
 % 方法 1: 儲存為 CSV 檔（推薦用於 Python）
 data_table = table(T, B, R, E, 'VariableNames', {'t', 'B', 'R', 'E'});
 csv_filename = fullfile(output_dir, 'evb_training_data.csv');
 writetable(data_table, csv_filename);
 fprintf('✓ CSV 數據已儲存至: %s\n', csv_filename);
-
-% 方法 2: 儲存為 MAT 檔（含完整資訊）
-mat_filename = fullfile(output_dir, 'evb_training_data.mat');
-save(mat_filename, 'T', 'B', 'R', 'E', 'Tjump', 'JumpInfo', ...
-     'r', 'K', 'sigma0', 'sigma1', 'k12', 'kc', 'alpha', 'beta', ...
-     't_frac', 'd_frac');
-fprintf('✓ MAT 數據已儲存至: %s\n', mat_filename);
-
-% 方法 3: 儲存跳躍點資訊為 CSV（用於標記特殊時刻）
-if ~isempty(JumpInfo)
-    jump_table = struct2table(JumpInfo);
-    jump_csv = fullfile(output_dir, 'evb_jump_info.csv');
-    writetable(jump_table, jump_csv);
-    fprintf('✓ 跳躍資訊已儲存至: %s\n', jump_csv);
-end
-
-% 方法 4: 儲存參數為 JSON 格式（方便 Python 讀取）
-params = struct('r', r, 'K', K, 'sigma0', sigma0, 'sigma1', sigma1, ...
-                'k12', k12, 'kc', kc, 'alpha', alpha, 'beta', beta, ...
-                't_frac', t_frac, 'd_frac', d_frac, ...
-                't0', t0, 'tf', tf, 'h', h);
-json_filename = fullfile(output_dir, 'evb_parameters.json');
-json_str = jsonencode(params, 'PrettyPrint', true);
-fid = fopen(json_filename, 'w');
-fprintf(fid, '%s', json_str);
-fclose(fid);
-fprintf('✓ 參數已儲存至: %s\n', json_filename);
-
-fprintf('\n數據維度: %d 個時間點 × 4 個變數 (t, B, R, E)\n', length(T));
-fprintf('時間範圍: [%.2f, %.2f]\n', min(T), max(T));
-fprintf('跳躍點數: %d\n', length(Tjump));
 
 %% ===================== Subfunctions =====================
 

@@ -1,8 +1,8 @@
 import numpy as np
+import pandas as pd
 from sympy import Symbol, Number, Function, StrictLessThan, sqrt, exp, log
 from physicsnemo.sym.eq.pde import PDE
 from typing import Sequence
-
 import physicsnemo.sym
 from physicsnemo.sym.hydra import instantiate_arch, PhysicsNeMoConfig
 from physicsnemo.sym.solver import Solver
@@ -11,12 +11,15 @@ from physicsnemo.sym.geometry.primitives_1d import Line1D
 from physicsnemo.sym.domain.constraint import (
     PointwiseInteriorConstraint, PointwiseBoundaryConstraint,
 )
-
 from physicsnemo.sym.domain.validator import PointwiseValidator
 from physicsnemo.sym.key import Key
-
 import time
 from plotter import CustomValidatorPlotter
+import torch
+from physicsnemo.sym.domain.constraint.continuous import PointwiseConstraint
+from physicsnemo.sym.dataset.continuous import DictPointwiseDataset
+from physicsnemo.sym.loss import PointwiseLossNorm
+import os
 
 # ODE (原始):
 #   dB/dt = r * B * (1 - B/K)
@@ -41,18 +44,18 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ODE 參數
     r_param = 0.10      # growth rate
     K_param = 5.0       # carrying capacity
-    sigma0_param = 0.01 # B → R rate
-    k12_param = 0.05    # R → E rate
+    sigma0_param = 0.30 # B → R rate
+    k12_param = 0.20    # R → E rate
     kc_param = 0.15     # E decay rate
 
     # 事件與硬約束
-    t_js_original = (10.0, 20.0, 40.0)  # 原始時間（單位：天）
+    t_js_original = (5.0, 12.0, 20.0)  # 原始時間（單位：天）
     t_js: Sequence[float] = tuple((t - t_0) / time_scale for t in t_js_original)  # 轉換為縮放時間 [0, 1]
-    d_js: Sequence[float] = (1.5, 1.5, 1.5)  # 劑量序列
+    d_js: Sequence[float] = (2, 2, 2)  # 劑量序列
     alpha: float = 0.30  # SF = exp(-alpha*d - beta*d^2)
     beta: float = 0.03
     sigma1: float = 0.20
-    kappa: float = 80.0
+    kappa: float = 20.0
     mask_eps = 0.01  # ε：遮罩半寬
     
     # 初始條件
@@ -89,17 +92,17 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
             B = M * B_bar
             R = R_bar + Number(sigma1) * sum(
-                (1 - sf) * B * Hj for sf, Hj in zip(SF_list, H_list)
+                (1 - sf) * B_bar * Hj for sf, Hj in zip(SF_list, H_list)
             )
             E = E_bar
 
             eps = Number(1e-8)  # 防止除 0
-            # 原始殘差
+            # 原始殘差 t
             resB = B.diff(x) - ts * r * B * (1 - B/K)
             resR = R.diff(x) - ts * (s0 * B - k12 * R)
             resE = E.diff(x) - ts * (k12 * R - kc * E)
 
-            # Step 3: 事件遮罩 w(t)
+            # Step 3: 事件遮罩 w(t) X
             eps_mask = Number(mask_eps)
             def mask_one(arg):
                 # m_j(t) = 1 - exp(- ( (t - t_j)^2 / (2 eps^2) ))
@@ -122,7 +125,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             E_scale = K * s0 / kc
             
             self.equations = {
-                "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2),
+                "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2 + B_scale**2),
                 "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2 + R_scale**2),
                 "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2 + E_scale**2),
             }
@@ -164,8 +167,9 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # 確保 batch_size 整數劃分正確
     interior_total = cfg.batch_size.interior
-    interior_early_size = int(0.7 * interior_total)
-    interior_late_size = interior_total - interior_early_size  # 確保總和正確
+    interior_early_size = max(1, int(0.5 * interior_total))  # 降低基礎採樣比例，為事件區域留出空間
+    interior_late_size = max(1, int(0.3 * interior_total))
+    interior_event_size = max(1, interior_total - interior_early_size - interior_late_size)  # 事件區域採樣
 
     # 2a. 前期內點（x < 0.3）
     criteria_early = StrictLessThan(x, 0.3)
@@ -191,92 +195,105 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     )
     domain.add_constraint(interior_late, "interior_late")
 
-    # add validation data
-    total_point = 10000 
-    X_flat = np.linspace(0, 1.0, total_point)[:, None]  # total_point points in scaled time t_s ∈ [0, 1]
+    # 2c. 事件點附近密集採樣（在 tj ± δ 範圍內）
+    # 針對每個事件時間點 tj，在其附近區域增加採樣密度
+    delta = 0.05  # 事件點附近的採樣範圍（縮放時間單位）
+    event_batch_per_tj = max(1, interior_event_size // len(t_js))  # 每個事件點分配的採樣數
     
-    # Exact analytical solution
-    from scipy.integrate import cumulative_trapezoid
-    
-    # 使用統一定義的參數
-    r = r_param
-    K = K_param
-    sigma0 = sigma0_param
-    k12 = k12_param
-    kc = kc_param
-    
-    # Calculate constant c from initial condition: B0 = K / (1 + c)
-    c = (K - B0) / B0
-    
-    # 將縮放時間 t_s 轉換回原始時間 t
-    t_s = X_flat.flatten()  # scaled time array [0, 1]
-    T = t_0 + t_s * (t_f - t_0)  # original time array [t_0, t_f]
-    
-    # Helper function: F_alpha(t, alpha) = ∫_0^t e^{alpha*s} * B(s) ds
-    def F_alpha(t, alpha, r, K, c):
-        """
-        Compute ∫_0^t exp(alpha*s) * B(s) ds where B(s) = K/(1 + c*exp(-r*s))
-        """
-        # B(s) = K / (1 + c*exp(-r*s))
-        # ∫ exp(alpha*s) * K/(1 + c*exp(-r*s)) ds
+    for i, tj in enumerate(t_js):
+        # 定義事件點附近的區域：|x - tj| < delta
+        # 使用兩個條件的交集：x > tj - delta AND x < tj + delta
+        from sympy import StrictGreaterThan, And
+        criteria_event = And(
+            StrictGreaterThan(x, max(0.0, tj - delta)),
+            StrictLessThan(x, min(1.0, tj + delta))
+        )
         
-        # For numerical stability, we compute this integral numerically
-        result = np.zeros_like(t)
-        for i, ti in enumerate(t):
-            if ti == 0:
-                result[i] = 0.0
-            else:
-                s_vals = np.linspace(0, ti, 500)
-                B_vals = K / (1.0 + c * np.exp(-r * s_vals))
-                integrand = np.exp(alpha * s_vals) * B_vals
-                result[i] = np.trapz(integrand, s_vals)
-        return result
+        interior_event = PointwiseInteriorConstraint(
+            nodes=nodes,
+            geometry=geo,
+            outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
+            lambda_weighting={"ode_B": wB * 2.0, "ode_R": wR * 2.0, "ode_E": wE * 2.0},  # ★事件區域權重加倍
+            criteria=criteria_event,
+            batch_size=event_batch_per_tj,
+        )
+        domain.add_constraint(interior_event, f"interior_event_{i+1}")  # 命名為 interior_event_1, interior_event_2, ...
+
+
+
+    # ========== 讀取 CSV 數據作為 Data Loss ==========
+    # 使用絕對路徑，避免 Hydra 改變工作目錄後找不到檔案
+    csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data.csv")
+    df = pd.read_csv(csv_path)
     
-    # ---------- Exact solution (vectorized) ----------
-    B_ex = K / (1.0 + c * np.exp(-r * T))                       # logistic
-    
-    Fk12 = F_alpha(T, k12, r, K, c)                              # ∫_0^t e^{k12 s} B(s) ds
-    R_ex = np.exp(-k12 * T) * (R0 + sigma0 * Fk12)
-    
-    if not np.isclose(kc, k12, atol=1e-12):
-        Fkc  = F_alpha(T, kc, r, K, c)
-        E_ex = (np.exp(-kc * T) * E0
-                + (k12 / (kc - k12)) * (np.exp(-k12 * T) - np.exp(-kc * T)) * R0
-                + sigma0 * (k12 / (kc - k12)) * (np.exp(-k12 * T) * Fk12 - np.exp(-kc * T) * Fkc))
-    else:
-        # kc == k12 = k 的極限式：E(t) = e^{-k t}[ E0 + k ∫_0^t e^{k s} R(s) ds ]
-        k = kc
-        Fk = F_alpha(T, k, r, K, c)
-        # ∫_0^t e^{k s} R(s) ds = t*R0 + sigma0 ∫_0^t F_k(s) ds
-        Gk = cumulative_trapezoid(Fk, T, initial=0.0)
-        E_ex = np.exp(-k * T) * (E0 + k * (T * R0 + sigma0 * Gk))
-    
-    B_true = B_ex[:, None]  # shape=(total_point, 1)
-    R_true = R_ex[:, None]  # shape=(total_point, 1)
-    E_true = E_ex[:, None]  # shape=(total_point, 1)
-    
+    # CSV 欄位：t, B, R, E
+    # t 是原始時間 [0, 200]，需要轉換為縮放時間 t_s ∈ [0, 1]
+    t_original = df['t'].values
+    t_scaled = (t_original - t_0) / (t_f - t_0)  # 轉換為 [0, 1]
+
+    # 取得對應的 B, R, E 數值
+    B_csv = df['B'].values
+    R_csv = df['R'].values
+    E_csv = df['E'].values
+
+    # 準備數據格式
+    X_flat = t_scaled[:, None]  # shape=(n_points, 1)
+    B_true = B_csv[:, None]     # shape=(n_points, 1)
+    R_true = R_csv[:, None]     # shape=(n_points, 1)
+    E_true = E_csv[:, None]     # shape=(n_points, 1)
+
     # Build invar and outvar
     invar_numpy = {   # dict of input variables
-        "x": X_flat,  # shape=(total_point, 1)
+        "x": X_flat,  # shape=(n_points, 1)
     }
     outvar_numpy = {  # dict of output variables
-        "B": B_true,  # shape=(total_point, 1)
-        "R": R_true,  # shape=(total_point, 1)
-        "E": E_true,  # shape=(total_point, 1)
+        "B": B_true,  # shape=(n_points, 1)
+        "R": R_true,  # shape=(n_points, 1)
+        "E": E_true,  # shape=(n_points, 1)
     }
 
+    # 使用 PointwiseConstraint 將 CSV 數據添加為訓練約束
+    # 創建數據集
+    data_B_weight = 5.0
+    data_R_weight = 5.0
+    data_E_weight = 5.0
+    data_batch_size = 64
+    
+    dataset = DictPointwiseDataset(
+        invar=invar_numpy,
+        outvar=outvar_numpy,
+        lambda_weighting={
+            "B": np.full((len(X_flat), 1), data_B_weight),
+            "R": np.full((len(X_flat), 1), data_R_weight),
+            "E": np.full((len(X_flat), 1), data_E_weight),
+        },
+    )
+
+    # 創建數據約束
+    data_constraint = PointwiseConstraint(
+        nodes=nodes,
+        dataset=dataset,
+        batch_size=data_batch_size,
+        loss=PointwiseLossNorm(),  # 使用標準點式損失
+        shuffle=True,  # 打亂數據順序
+        drop_last=True,  # 使用 CUDA graphs 時必須為 True
+        num_workers=0,  # 避免多進程問題
+    )
+    domain.add_constraint(data_constraint, "data_constraint")
+
+    # ========== 驗證器 ==========
     _plotter = None
     if cfg.run_mode == 'eval':
         _plotter = CustomValidatorPlotter()
 
+    # 使用所有數據點進行驗證（不使用 batch）
     validator = PointwiseValidator(
         nodes=nodes, 
         invar=invar_numpy, 
         true_outvar=outvar_numpy, 
-        batch_size=10000,
+        batch_size=len(X_flat),  # 驗證時使用所有數據點
         plotter=_plotter,
     )
-
     domain.add_validator(validator)
 
     # make solver
