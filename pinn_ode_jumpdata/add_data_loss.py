@@ -194,7 +194,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     print("Loading training data from CSV...")
     import os
     # 使用絕對路徑，避免 Hydra 改變工作目錄後找不到檔案
-    csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data.csv")
+    csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data_jump.csv")
     df = pd.read_csv(csv_path)
     
     # CSV 欄位：t, B, R, E
