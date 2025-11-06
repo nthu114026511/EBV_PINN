@@ -5,11 +5,15 @@ from datetime import datetime
 import os
 
 class CustomValidatorPlotter(ValidatorPlotter):
-    def __init__(self):
+    def __init__(self, t_0=0.0, t_f=60.0):
         super().__init__()
+        self.t_0 = t_0  # 原始時間起點
+        self.t_f = t_f  # 原始時間終點
     
     def __call__(self, invar, true_outvar, pred_outvar):
         x_all = invar["x"][:, 0]
+        # 將縮放時間轉換回原始時間
+        t_all = self.t_0 + x_all * (self.t_f - self.t_0)
         
         # Extract true and predicted values
         B_true_all = true_outvar["B"][:, 0]
@@ -45,10 +49,10 @@ class CustomValidatorPlotter(ValidatorPlotter):
         fig, axes = plt.subplots(3, 1, figsize=(10, 12))
         
         # Plot B
-        axes[0].plot(x_all, B_true_all, label="B_true", linewidth=2, color='blue')
-        axes[0].plot(x_all, B_pred_all, label="B_pred", linestyle="--", linewidth=2, color='red')
-        axes[0].set_xlabel("x", fontsize=12)
-        axes[0].set_ylabel("B(x)", fontsize=12)
+        axes[0].plot(t_all, B_true_all, label="B_true", linewidth=2, color='blue')
+        axes[0].plot(t_all, B_pred_all, label="B_pred", linestyle="--", linewidth=2, color='red')
+        axes[0].set_xlabel("Time (t)", fontsize=12)
+        axes[0].set_ylabel("B(t)", fontsize=12)
         axes[0].set_title(
             f"$B(x)$ - $L^\\infty$ error: {sup_error_B:.2e}",
             fontsize=11
@@ -57,10 +61,10 @@ class CustomValidatorPlotter(ValidatorPlotter):
         axes[0].grid(True, alpha=0.3)
 
         # Plot R
-        axes[1].plot(x_all, R_true_all, label="R_true", linewidth=2, color='green')
-        axes[1].plot(x_all, R_pred_all, label="R_pred", linestyle="--", linewidth=2, color='orange')
-        axes[1].set_xlabel("x", fontsize=12)
-        axes[1].set_ylabel("R(x)", fontsize=12)
+        axes[1].plot(t_all, R_true_all, label="R_true", linewidth=2, color='green')
+        axes[1].plot(t_all, R_pred_all, label="R_pred", linestyle="--", linewidth=2, color='orange')
+        axes[1].set_xlabel("Time (t)", fontsize=12)
+        axes[1].set_ylabel("R(t)", fontsize=12)
         axes[1].set_title(
             f"$R(x)$ - $L^\\infty$ error: {sup_error_R:.2e}",
             fontsize=11
@@ -69,10 +73,10 @@ class CustomValidatorPlotter(ValidatorPlotter):
         axes[1].grid(True, alpha=0.3)
 
         # Plot E
-        axes[2].plot(x_all, E_true_all, label="E_true", linewidth=2, color='purple')
-        axes[2].plot(x_all, E_pred_all, label="E_pred", linestyle="--", linewidth=2, color='brown')
-        axes[2].set_xlabel("x", fontsize=12)
-        axes[2].set_ylabel("E(x)", fontsize=12)
+        axes[2].plot(t_all, E_true_all, label="E_true", linewidth=2, color='purple')
+        axes[2].plot(t_all, E_pred_all, label="E_pred", linestyle="--", linewidth=2, color='brown')
+        axes[2].set_xlabel("Time (t)", fontsize=12)
+        axes[2].set_ylabel("E(t)", fontsize=12)
         axes[2].set_title(
             f"$E(x)$ - $L^\\infty$ error: {sup_error_E:.2e}",
             fontsize=11

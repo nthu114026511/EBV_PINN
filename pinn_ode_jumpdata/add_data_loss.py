@@ -27,9 +27,9 @@ CONFIG = {
         'ode_B': 1.0,     # B 方程殘差權重
         'ode_R': 5.0,     # R 方程殘差權重（提高以平衡變化較小的變量）
         'ode_E': 5.0,     # E 方程殘差權重（提高以平衡變化較小的變量）
-        'data_B': 10.0,   # CSV 數據擬合權重 - B
-        'data_R': 10.0,   # CSV 數據擬合權重 - R  
-        'data_E': 10.0,   # CSV 數據擬合權重 - E
+        'data_B': 5.0,   # CSV 數據擬合權重 - B
+        'data_R': 5.0,   # CSV 數據擬合權重 - R  
+        'data_E': 5.0,   # CSV 數據擬合權重 - E
     },
     # Interior sampling - 控制內點採樣策略
     'interior_sampling': {
@@ -62,7 +62,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ODE 參數
     r_param = 0.10      # growth rate
     K_param = 5.0       # carrying capacity
-    sigma0_param = 0.01 # B → R rate
+    sigma0_param = 0.01  # B → R rate
     k12_param = 0.05    # R → E rate
     kc_param = 0.15     # E decay rate
     
@@ -122,8 +122,8 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             # 使用固定尺度相對誤差（適度歸一化，避免訓練初期過度放大）
             self.equations = {
                 "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2),
-                "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2 + R_scale**2),
-                "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2 + E_scale**2),
+                "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2),
+                "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2),
             }
     
     # Setup PDE (傳入縮放因子)
@@ -156,39 +156,22 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     )
     domain.add_constraint(IC, "IC")
 
-    # 2) 內點殘差配重從配置讀取，並偏重前期區間
+    # 2) 內點殘差配重從配置讀取
     wB = ode_B_weight
     wR = ode_R_weight
     wE = ode_E_weight
 
-    # 確保 batch_size 整數劃分正確
     interior_total = cfg.batch_size.interior
-    interior_early_size = int(early_fraction * interior_total)
-    interior_late_size = interior_total - interior_early_size  # 確保總和正確
-
-    # 2a. 前期內點（x < early_cutoff）
-    criteria_early = StrictLessThan(x, early_cutoff)
-    interior_early = PointwiseInteriorConstraint(
+    
+    # 使用統一的內點約束
+    interior = PointwiseInteriorConstraint(
         nodes=nodes,
         geometry=geo,
         outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
         lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-        criteria=criteria_early,                 # ★集中抽樣早期（變化快）
-        batch_size=interior_early_size,          # ★大部分點給早期
+        batch_size=interior_total,
     )
-    domain.add_constraint(interior_early, "interior_early")
-
-    # 2b. 後期內點（x ≥ 0.3）
-    criteria_late = ~criteria_early
-    interior_late = PointwiseInteriorConstraint(
-        nodes=nodes,
-        geometry=geo,
-        outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
-        lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-        criteria=criteria_late,
-        batch_size=interior_late_size,
-    )
-    domain.add_constraint(interior_late, "interior_late")
+    domain.add_constraint(interior, "interior")
 
     # ========== 讀取 CSV 數據作為 Data Loss ==========
     print("Loading training data from CSV...")
@@ -263,11 +246,6 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     print(f"  Data constraint batch size: {data_batch_size}")
     print(f"  Data weights - B: {data_B_weight}, R: {data_R_weight}, E: {data_E_weight}")
 
-
-
-
-
-    
     # ========== 驗證器 ==========
     _plotter = None
     if cfg.run_mode == 'eval':

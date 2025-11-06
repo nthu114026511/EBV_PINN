@@ -44,19 +44,19 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ODE 參數
     r_param = 0.10      # growth rate
     K_param = 5.0       # carrying capacity
-    sigma0_param = 0.30 # B → R rate
-    k12_param = 0.20    # R → E rate
+    sigma0_param = 0.01  # B → R rate
+    k12_param = 0.05    # R → E rate
     kc_param = 0.15     # E decay rate
 
     # 事件與硬約束
-    t_js_original = (5.0, 12.0, 20.0)  # 原始時間（單位：天）
+    t_js_original = (10.0, 20.0, 40.0)  # 原始時間（單位：天）
     t_js: Sequence[float] = tuple((t - t_0) / time_scale for t in t_js_original)  # 轉換為縮放時間 [0, 1]
-    d_js: Sequence[float] = (2, 2, 2)  # 劑量序列
+    d_js: Sequence[float] = (1.5, 1.5, 1.5)  # 劑量序列
     alpha: float = 0.30  # SF = exp(-alpha*d - beta*d^2)
     beta: float = 0.03
     sigma1: float = 0.20
-    kappa_default: float = 20.0  # 初值不再直接使用，退火時會被覆蓋
-    mask_eps = 0.05  # ε：遮罩半寬
+    kappa: float = 30.0  # 初值不再直接使用，退火時會被覆蓋
+    mask_eps = 0.01  # ε：遮罩半寬
     
     # 初始條件
     B0 = 0.05
@@ -89,25 +89,18 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             H_list  = [H_kappa(x - Number(tj)) for tj in t_js]
             logSF   = [log(sf) for sf in SF_list]
 
-            # M_full：包含所有事件
-            M_full = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
+            # M(t)
+            H_list = [H_kappa(x - Number(tj)) for tj in t_js]
+            logSF  = [log(sf) for sf in SF_list]
+            M = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
 
-            # M_pre_list[j]：只累積到第 j-1 個事件（jump 前的乘積）
-            M_pre_list = []
-            prefix = Number(0.0)
-            for j in range(len(t_js)):
-                M_pre_list.append(exp(prefix))
-                prefix = prefix + logSF[j] * H_list[j]
-
-            # 物理解釋：B = M_full * B_bar；R 的跳躍用 B_pre_j = M_pre_list[j] * B_bar
-            B = M_full * B_bar
+            B = M * B_bar
             R = R_bar + Number(sigma1) * sum(
-                (1 - sf) * (M_pre_list[j] * B_bar) * H_list[j]
-                for j, sf in enumerate(SF_list)
+                (1 - sf) * B_bar * Hj for sf, Hj in zip(SF_list, H_list)
             )
             E = E_bar
 
-            eps = Number(1e-6)  # 防止除 0
+            eps = Number(1e-8)  # 防止除 0
 
             # 殘差（x≡t_s）
             resB = B.diff(x) - ts * r * B * (1 - B/K)
@@ -140,7 +133,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
                 "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2),
             }
 
-    # === 共用網路與幾何（退火各階段沿用這同一顆 FC 權重） ===
+    # === 網路與幾何 ===
     FC = instantiate_arch(        
         input_keys=[Key("x")],
         output_keys=[Key("B"), Key("R"), Key("E")],
@@ -149,135 +142,146 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     x = Symbol("x")
     geo = Line1D(0.0, 1.0)
 
-    # --- Validation data (x ≡ t_s，使用解析對照) ---
-    total_point = 10000
-    X_flat = np.linspace(0, 1.0, total_point)[:, None]   # x
+    # --- 建構 PDE/Nodes（帶入固定 κ） ---
+    ode = CustomODE(
+        r=r_param, K=K_param, sigma0=sigma0_param, k12=k12_param, kc=kc_param,
+        time_scale=time_scale, t_js=t_js, d_js=d_js,
+        alpha=alpha, beta=beta, sigma1=sigma1, kappa=kappa, mask_eps=mask_eps
+    )
+    nodes = ode.make_nodes() + [FC.make_node(name="FC")]
 
-    from scipy.integrate import cumulative_trapezoid
+    # --- Domain 與約束 ---
+    domain = Domain()
 
-    r, K, sigma0, k12, kc = r_param, K_param, sigma0_param, k12_param, kc_param
-    c = (K - B0) / B0
-    t_s = X_flat.flatten()
-    T = t_0 + t_s * (t_f - t_0)
+    # 1) IC 權重放大
+    IC = PointwiseBoundaryConstraint(
+        nodes=nodes,
+        geometry=geo,
+        outvar={"B": B0, "R": R0, "E": E0},
+        lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},  # IC 強化
+        batch_size=cfg.batch_size.IC,
+        parameterization={x: 0.0},
+    )
+    domain.add_constraint(IC, "IC")
 
-    def F_alpha(t_arr, alpha, r, K, c):
-        result = np.zeros_like(t_arr)
-        for i, ti in enumerate(t_arr):
-            if ti == 0:
-                result[i] = 0.0
-            else:
-                s_vals = np.linspace(0, ti, 500)
-                B_vals = K / (1.0 + c * np.exp(-r * s_vals))
-                integrand = np.exp(alpha * s_vals) * B_vals
-                result[i] = np.trapz(integrand, s_vals)
-        return result
+    # 2) 內點殘差配重（R/E 比 B 重）
+    wB, wR, wE = 1.0, 5.0, 5.0
+    interior_total = cfg.batch_size.interior
+    interior = PointwiseInteriorConstraint(
+        nodes=nodes,
+        geometry=geo,
+        outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
+        lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
+        batch_size=interior_total,
+    )
+    domain.add_constraint(interior, "interior")
 
-    B_ex = K / (1.0 + c * np.exp(-r * T))
-    Fk12 = F_alpha(T, k12, r, K, c)
-    R_ex = np.exp(-k12 * T) * (R0 + sigma0 * Fk12)
+    # ========== 讀取 CSV 數據作為 Data Loss ==========
+    # 使用絕對路徑，避免 Hydra 改變工作目錄後找不到檔案
+    csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data_jump.csv")
+    df = pd.read_csv(csv_path)
+    print(f"[INFO] Loaded CSV from: {csv_path}")
+    
+    # CSV 欄位：t, B, R, E
+    # t 是原始時間 [0, 60]，需要轉換為縮放時間 t_s ∈ [0, 1]
+    t_original = df['t'].values
+    t_scaled = (t_original - t_0) / (t_f - t_0)  # 轉換為 [0, 1]
 
-    if not np.isclose(kc, k12, atol=1e-12):
-        Fkc = F_alpha(T, kc, r, K, c)
-        E_ex = (np.exp(-kc * T) * E0
-                + (k12 / (kc - k12)) * (np.exp(-k12 * T) - np.exp(-kc * T)) * R0
-                + sigma0 * (k12 / (kc - k12)) *
-                  (np.exp(-k12 * T) * Fk12 - np.exp(-kc * T) * Fkc))
-    else:
-        k = kc
-        Fk = F_alpha(T, k, r, K, c)
-        Gk = cumulative_trapezoid(Fk, T, initial=0.0)
-        E_ex = np.exp(-k * T) * (E0 + k * (T * R0 + sigma0 * Gk))
+    # 取得對應的 B, R, E 數值
+    B_csv = df['B'].values
+    R_csv = df['R'].values
+    E_csv = df['E'].values
 
-    invar_numpy = {"x": X_flat}
-    outvar_numpy = {
-        "B": B_ex[:, None],
-        "R": R_ex[:, None],
-        "E": E_ex[:, None],
+    # 準備數據格式
+    X_flat = t_scaled[:, None]  # shape=(n_points, 1)
+    B_true = B_csv[:, None]     # shape=(n_points, 1)
+    R_true = R_csv[:, None]     # shape=(n_points, 1)
+    E_true = E_csv[:, None]     # shape=(n_points, 1)
+
+    # Build invar and outvar
+    invar_numpy = {   # dict of input variables
+        "x": X_flat,  # shape=(n_points, 1)
+    }
+    outvar_numpy = {  # dict of output variables
+        "B": B_true,  # shape=(n_points, 1)
+        "R": R_true,  # shape=(n_points, 1)
+        "E": E_true,  # shape=(n_points, 1)
     }
 
-    # ===========================================================
-    # κ 退火設定：會自動根據 conf.max_steps 分段
-    # ===========================================================
-    kappa_schedule = [2.0, 5.0, 10.0, 20.0, 40.0]  # 可自行調整
-    total_steps = getattr(cfg, "max_steps", getattr(getattr(cfg, "training", {}), "max_steps", 2000))
-    epochs_per_stage = max(1, int(total_steps // len(kappa_schedule)))
-    print(f"\n[κ-anneal] total={total_steps}, stages={len(kappa_schedule)}, per_stage={epochs_per_stage}\n")
+    # 使用 PointwiseConstraint 將 CSV 數據添加為訓練約束創建數據集
+    data_B_weight = 5.0
+    data_R_weight = 5.0
+    data_E_weight = 5.0
+    data_batch_size = 64
+    
+    dataset = DictPointwiseDataset(
+        invar=invar_numpy,
+        outvar=outvar_numpy,
+        lambda_weighting={
+            "B": np.full((len(X_flat), 1), data_B_weight),
+            "R": np.full((len(X_flat), 1), data_R_weight),
+            "E": np.full((len(X_flat), 1), data_E_weight),
+        },
+    )
 
-    # === 進行多階段 κ 退火訓練 ===
-    for stage_idx, kappa in enumerate(kappa_schedule, start=1):
-        print(f"=== κ-Anneal Stage {stage_idx}/{len(kappa_schedule)} | κ = {kappa:.1f} ===")
-        
-        # --- 重建 PDE/Nodes（帶入當前 κ） ---
-        ode = CustomODE(
-            r=r_param, K=K_param, sigma0=sigma0_param, k12=k12_param, kc=kc_param,
-            time_scale=time_scale, t_js=t_js, d_js=d_js,
-            alpha=alpha, beta=beta, sigma1=sigma1, kappa=kappa, mask_eps=mask_eps
-        )
-        nodes = ode.make_nodes() + [FC.make_node(name="FC")]
+    # 創建數據約束
+    data_constraint = PointwiseConstraint(
+        nodes=nodes,
+        dataset=dataset,
+        batch_size=data_batch_size,
+        loss=PointwiseLossNorm(),  # 使用標準點式損失
+        shuffle=True,  # 打亂數據順序
+        drop_last=True,  # 使用 CUDA graphs 時必須為 True
+        num_workers=0,  # 避免多進程問題
+    )
+    domain.add_constraint(data_constraint, "data_constraint")
 
-        # --- Domain 與約束 ---
-        domain = Domain()
+    # ========== 驗證器 ==========
+    _plotter = None
+    if cfg.run_mode == 'eval':
+        _plotter = CustomValidatorPlotter()
 
-        # 1) IC 權重放大
-        IC = PointwiseBoundaryConstraint(
-            nodes=nodes,
-            geometry=geo,
-            outvar={"B": B0, "R": R0, "E": E0},
-            lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},  # IC 強化
-            batch_size=cfg.batch_size.IC,
-            parameterization={x: 0.0},
-        )
-        domain.add_constraint(IC, "IC")
+    # 使用所有數據點進行驗證（不使用 batch）
+    validator = PointwiseValidator(
+        nodes=nodes, 
+        invar=invar_numpy, 
+        true_outvar=outvar_numpy, 
+        batch_size=len(X_flat),  # 驗證時使用所有數據點
+        plotter=_plotter,
+    )
+    domain.add_validator(validator)
 
-        # 2) 內點殘差配重（R/E 比 B 重）
-        wB, wR, wE = 1.0, 5.0, 5.0
-        interior_total = cfg.batch_size.interior
-        interior = PointwiseInteriorConstraint(
-            nodes=nodes,
-            geometry=geo,
-            outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
-            lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-            batch_size=interior_total,
-        )
-        domain.add_constraint(interior, "interior")
+    # make solver
+    slv = Solver(cfg, domain)
 
-        # --- Validator ---
-        _plotter = CustomValidatorPlotter() if cfg.run_mode == "eval" else None
-        validator = PointwiseValidator(
-            nodes=nodes,
-            invar=invar_numpy,
-            true_outvar=outvar_numpy,
-            batch_size=len(invar_numpy["x"]),
-            plotter=_plotter,
-        )
-        domain.add_validator(validator)
-
-        # --- 每階段設定 epoch（覆蓋 conf 的單段步數） ---
-        if hasattr(cfg, "max_steps"):
-            cfg.max_steps = epochs_per_stage
-        elif hasattr(cfg, "training") and isinstance(cfg.training, dict):
-            cfg.training["max_steps"] = epochs_per_stage
-
-        # --- Solver & 訓練（FC 權重沿用） ---
-        slv = Solver(cfg, domain)
-        slv.solve()
-
-    print("\n=== All κ-Anneal stages finished ===\n")
-
-    # 訓練完成後，自動執行評估並生成對比圖（用最後一段的 FC 權重）
+    # start solver
+    slv.solve()
+    
+    # 訓練完成後，自動執行評估並生成對比圖
     if cfg.run_mode == 'train':
         print("\n" + "="*60)
         print("Training completed! Now generating comparison plots...")
         print("="*60 + "\n")
         
+        # 創建繪圖器並執行評估
         plotter = CustomValidatorPlotter()
+        
+        # 從訓練好的模型獲取預測值
+        import torch
         pred_outvar = {}
         with torch.no_grad():
+            # 將 numpy 數據轉換為 torch tensor
             invar_torch = {k: torch.tensor(v, dtype=torch.float32, device=slv.device) 
-                           for k, v in invar_numpy.items()}
+                          for k, v in invar_numpy.items()}
+            
+            # 使用 FC 網絡進行預測
             pred_dict = FC(invar_torch)
+            
+            # 轉換回 numpy
             for key in pred_dict:
                 pred_outvar[key] = pred_dict[key].detach().cpu().numpy()
+        
+        # 生成對比圖
         plotter(invar_numpy, outvar_numpy, pred_outvar)
 
 if __name__ == "__main__":
