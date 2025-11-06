@@ -56,7 +56,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     beta: float = 0.03
     sigma1: float = 0.20
     kappa_default: float = 20.0  # 初值不再直接使用，退火時會被覆蓋
-    mask_eps = 0.01  # ε：遮罩半寬
+    mask_eps = 0.02  # ε：遮罩半寬
     
     # 初始條件
     B0 = 0.05
@@ -85,14 +85,25 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             beta_ = Number(beta)
             SF_list = [exp(-alpha_ * Number(d) - beta_ * Number(d)**2) for d in d_js]
 
-            # M(t)
-            H_list = [H_kappa(x - Number(tj)) for tj in t_js]
-            logSF  = [log(sf) for sf in SF_list]
-            M = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
+            # --- 生存率與階梯 ---
+            H_list  = [H_kappa(x - Number(tj)) for tj in t_js]
+            logSF   = [log(sf) for sf in SF_list]
 
-            B = M * B_bar
+            # M_full：包含所有事件
+            M_full = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
+
+            # M_pre_list[j]：只累積到第 j-1 個事件（jump 前的乘積）
+            M_pre_list = []
+            prefix = Number(0.0)
+            for j in range(len(t_js)):
+                M_pre_list.append(exp(prefix))
+                prefix = prefix + logSF[j] * H_list[j]
+
+            # 物理解釋：B = M_full * B_bar；R 的跳躍用 B_pre_j = M_pre_list[j] * B_bar
+            B = M_full * B_bar
             R = R_bar + Number(sigma1) * sum(
-                (1 - sf) * B_bar * Hj for sf, Hj in zip(SF_list, H_list)
+                (1 - sf) * (M_pre_list[j] * B_bar) * H_list[j]
+                for j, sf in enumerate(SF_list)
             )
             E = E_bar
 
@@ -124,9 +135,9 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             E_scale = K * s0 / kc
             
             self.equations = {
-                "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2 + B_scale**2),
-                "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2 + R_scale**2),
-                "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2 + E_scale**2),
+                "ode_B": resB / sqrt(B**2 + (eps * B_scale)**2),
+                "ode_R": resR / sqrt(R**2 + (eps * R_scale)**2),
+                "ode_E": resE / sqrt(E**2 + (eps * E_scale)**2),
             }
 
     # === 共用網路與幾何（退火各階段沿用這同一顆 FC 權重） ===
@@ -195,7 +206,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # === 進行多階段 κ 退火訓練 ===
     for stage_idx, kappa in enumerate(kappa_schedule, start=1):
         print(f"=== κ-Anneal Stage {stage_idx}/{len(kappa_schedule)} | κ = {kappa:.1f} ===")
-
+        
         # --- 重建 PDE/Nodes（帶入當前 κ） ---
         ode = CustomODE(
             r=r_param, K=K_param, sigma0=sigma0_param, k12=k12_param, kc=kc_param,
