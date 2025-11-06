@@ -235,10 +235,10 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # 使用 PointwiseConstraint 將 CSV 數據添加為訓練約束
     # 創建數據集
-    data_B_weight = 5.0
-    data_R_weight = 5.0
-    data_E_weight = 5.0
-    data_batch_size = 64
+    #data_B_weight = 1.0
+    #data_R_weight = 5.0
+    #data_E_weight = 5.0
+    #data_batch_size = 64
     
     # dataset = DictPointwiseDataset(
     #     invar=invar_numpy,
