@@ -56,7 +56,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     beta: float = 0.03
     sigma1: float = 0.20
     kappa_default: float = 20.0  # 初值不再直接使用，退火時會被覆蓋
-    mask_eps = 0.02  # ε：遮罩半寬
+    mask_eps = 0.05  # ε：遮罩半寬
     
     # 初始條件
     B0 = 0.05
@@ -107,7 +107,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             )
             E = E_bar
 
-            eps = Number(1e-8)  # 防止除 0
+            eps = Number(1e-6)  # 防止除 0
 
             # 殘差（x≡t_s）
             resB = B.diff(x) - ts * r * B * (1 - B/K)
@@ -198,7 +198,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ===========================================================
     # κ 退火設定：會自動根據 conf.max_steps 分段
     # ===========================================================
-    kappa_schedule = [5.0, 10.0, 20.0, 40.0, 80.0]  # 可自行調整
+    kappa_schedule = [2.0, 5.0, 10.0, 20.0, 40.0]  # 可自行調整
     total_steps = getattr(cfg, "max_steps", getattr(getattr(cfg, "training", {}), "max_steps", 2000))
     epochs_per_stage = max(1, int(total_steps // len(kappa_schedule)))
     print(f"\n[κ-anneal] total={total_steps}, stages={len(kappa_schedule)}, per_stage={epochs_per_stage}\n")
@@ -240,25 +240,6 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             batch_size=interior_total,
         )
         domain.add_constraint(interior, "interior")
-
-        # 2c. 事件點附近密集採樣（在 tj ± δ 範圍內）
-        delta = 0.05  # 事件點附近的採樣範圍（縮放時間單位）
-        event_batch_per_tj = max(1, interior_total // max(1, len(t_js)) // 2)
-        from sympy import StrictGreaterThan, StrictLessThan, And
-        for i, tj in enumerate(t_js):
-            criteria_event = And(
-                StrictGreaterThan(x, max(0.0, tj - delta)),
-                StrictLessThan(x, min(1.0, tj + delta))
-            )
-            interior_event = PointwiseInteriorConstraint(
-                nodes=nodes,
-                geometry=geo,
-                outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
-                lambda_weighting={"ode_B": wB * 2.0, "ode_R": wR * 2.0, "ode_E": wE * 2.0},
-                criteria=criteria_event,
-                batch_size=event_batch_per_tj,
-            )
-            domain.add_constraint(interior_event, f"interior_event_{i+1}")
 
         # --- Validator ---
         _plotter = CustomValidatorPlotter() if cfg.run_mode == "eval" else None
