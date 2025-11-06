@@ -73,9 +73,26 @@ def run(cfg: PhysicsNeMoConfig) -> None:
                      t_js, d_js, alpha, beta, sigma1, kappa, mask_eps):
             x = Symbol("x")  # x ≡ t_s
             input_variables = {"x": x}
-            B_bar = Function("B")(*input_variables)
-            R_bar = Function("R")(*input_variables)
-            E_bar = Function("E")(*input_variables)
+            # --- raw NN outputs (symbolic) ---
+            B_raw = Function("B")(*input_variables)
+            R_raw = Function("R")(*input_variables)
+            E_raw = Function("E")(*input_variables)
+
+            # --- nonneg transforms (all SymPy-safe) ---
+            beta_sp = Number(4.0)         # softplus 陡峭度，2~6 皆可
+            eps_pos = Number(1e-8)        # 避免 log/除零
+
+            def softplus_sym(z):
+                # log(1 + exp(beta*z)) / beta + eps
+                return log(1 + exp(beta_sp*z)) / beta_sp + eps_pos
+
+            def sigmoid_sym(z):
+                return 1 / (1 + exp(-z))
+
+            # B ∈ [0, K]，R,E ≥ 0
+            B_core = K * sigmoid_sym(B_raw)               # 0..K
+            R_core = softplus_sym(R_raw)                  # ≥0
+            E_core = softplus_sym(E_raw)                  # ≥0
 
             r, K, s0, k12, kc, ts = map(Number, (r, K, sigma0, k12, kc, time_scale))
 
@@ -95,9 +112,10 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
             # M(t) 與 R 的事件型態（保持 Step 3 的結構）
             M = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
-            B = M * B_bar
-            R = R_bar + Number(sigma1) * sum((1 - sf) * B_bar * Hj for sf, Hj in zip(SF_list, H_list))
-            E = E_bar
+            # --- apply jump embedding ---
+            B = M * B_core
+            R = R_core + Number(sigma1) * sum((1 - sf) * B_core * Hj for sf, Hj in zip(SF_list, H_list))
+            E = E_core
 
             eps = Number(1e-8)  # 防除 0
 

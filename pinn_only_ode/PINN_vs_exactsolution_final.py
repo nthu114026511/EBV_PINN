@@ -66,7 +66,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # --- NN takes x, outputs B,R,E ---
     FC = instantiate_arch(
-        input_keys=[Key("x")],                       # ★ 用 x
+        input_keys=[Key("x")],                       
         output_keys=[Key("B"), Key("R"), Key("E")],
         cfg=cfg.arch.fully_connected,
     )
@@ -74,7 +74,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # --- Geometry: x ∈ [0,1] ---
     x = Symbol("x")
-    geo = Line1D(0.0, 1.0)                           # ★ 不設定 parameterization
+    geo = Line1D(0.0, 1.0)                   
 
     domain = Domain()
 
@@ -85,38 +85,13 @@ def run(cfg: PhysicsNeMoConfig) -> None:
         outvar={"B": B0, "R": R0, "E": E0},
         lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},
         batch_size=cfg.batch_size.IC,
-        parameterization={x: 0.0},                   # ★ 用 x
+        parameterization={x: 0.0},                  
     )
     domain.add_constraint(IC, "IC")
 
     # --- Interior residuals ---
     wB, wR, wE = 1.0, 5.0, 5.0
     interior_total = cfg.batch_size.interior
-    # early_size = int(0.7 * interior_total)
-    # late_size = interior_total - early_size
-    #
-    # criteria_early = StrictLessThan(x, 0.3)          # ★ 用 x
-    # criteria_late = ~criteria_early
-    #
-    # interior_early = PointwiseInteriorConstraint(
-    #     nodes=nodes,
-    #     geometry=geo,
-    #     outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
-    #     lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-    #     criteria=criteria_early,
-    #     batch_size=early_size,
-    # )
-    # domain.add_constraint(interior_early, "interior_early")
-    #
-    # interior_late = PointwiseInteriorConstraint(
-    #     nodes=nodes,
-    #     geometry=geo,
-    #     outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
-    #     lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-    #     criteria=criteria_late,
-    #     batch_size=late_size,
-    # )
-    # domain.add_constraint(interior_late, "interior_late")
 
     # 不分前後期：統一使用一個 interior constraint
     interior = PointwiseInteriorConstraint(
@@ -130,7 +105,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # --- Validation data (x ≡ t_s) ---
     total_point = 10000
-    X_flat = np.linspace(0, 1.0, total_point)[:, None]   # ★ x
+    X_flat = np.linspace(0, 1.0, total_point)[:, None]  
 
     from scipy.integrate import cumulative_trapezoid
 
@@ -167,7 +142,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
         Gk = cumulative_trapezoid(Fk, T, initial=0.0)
         E_ex = np.exp(-k * T) * (E0 + k * (T * R0 + sigma0 * Gk))
 
-    invar_numpy = {"x": X_flat}                        # ★ 用 x
+    invar_numpy = {"x": X_flat}                        
     outvar_numpy = {
         "B": B_ex[:, None],
         "R": R_ex[:, None],
