@@ -55,8 +55,8 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     alpha: float = 0.30  # SF = exp(-alpha*d - beta*d^2)
     beta: float = 0.03
     sigma1: float = 0.20
-    kappa: float = 30.0  # 供平滑階梯 H_k 使用
-    mask_eps = 0.05      # ε：事件半寬（同時用於 ODE 凹槽與 data 啟用）
+    kappa: float = 50.0  # 供平滑階梯 H_k 使用
+    mask_eps = 0.01      # ε：事件半寬（同時用於 ODE 凹槽與 data 啟用）
 
     # 初始條件
     B0 = 0.05
@@ -189,7 +189,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     )
     domain.add_constraint(interior, "interior")
 
-    # ========== L_data：只在事件點附近啟用的 Data Loss ==========
+    # ========== L_data：一直啟用，事件附近加強 ==========
     csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data_jump.csv")
     df = pd.read_csv(csv_path)
     print(f"[INFO] Loaded CSV from: {csv_path}")
@@ -203,35 +203,29 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     E_true = df["E"].values[:, None]
     X_flat = t_scaled[:, None]
 
-    # ---- 事件權重：w_data(t) = 1 - w_ode(t) ----
-    # w_ode(t) 與 PDE 中的 w(t) 同型：事件外≈1、事件近≈0
-    def gaussian_notch(ts, tj, eps):
-        return 1.0 - np.exp(-((ts - tj) ** 2) / (2.0 * eps ** 2))
-    w_ode_np = np.ones_like(t_scaled, dtype=np.float64)
+    # ---- 事件加強權重：w_jump(t) ----
+    # w_jump(t) 在事件附近為高值（例 2.0），遠離為 1.0
+    def gaussian_peak(ts, tj, eps, peak_val=2.0):
+        """在事件 t_j 附近產生高斯峰，峰值為 peak_val"""
+        return 1.0 + (peak_val - 1.0) * np.exp(-((ts - tj) ** 2) / (2.0 * eps ** 2))
+    
+    w_jump_np = np.ones_like(t_scaled, dtype=np.float64)
     for tj in t_js:
-        w_ode_np *= gaussian_notch(t_scaled, tj, mask_eps)
-    w_data_np = 1.0 - w_ode_np  # 事件近≈1，其它≈0
-
-    # （可選）把事件窗外的小尾巴截 0，讓更乾脆
-    w_data_np[w_data_np < 1e-3] = 0.0
-
-    # 統計一下事件加權覆蓋率方便 debug
-    coverage = float((w_data_np > 0).sum()) / float(w_data_np.size)
-    print(f"[INFO] L_data active ratio: {coverage:.2%} of CSV samples")
+        w_jump_np *= gaussian_peak(t_scaled, tj, mask_eps, peak_val=2.0)
 
     invar_numpy = {"x": X_flat}
     outvar_numpy = {"B": B_true, "R": R_true, "E": E_true}
 
-    # 僅在事件附近啟用 data loss（權重隨 w_data_np 而動）
+    # 一直啟用 data loss，事件附近加強
     data_B_weight = 5.0
     data_R_weight = 5.0
     data_E_weight = 5.0
     data_batch_size = 64
 
     lambda_weighting = {
-        "B": (data_B_weight * w_data_np)[:, None],
-        "R": (data_R_weight * w_data_np)[:, None],
-        "E": (data_E_weight * w_data_np)[:, None],
+        "B": (data_B_weight * w_jump_np)[:, None],
+        "R": (data_R_weight * w_jump_np)[:, None],
+        "E": (data_E_weight * w_jump_np)[:, None],
     }
 
     dataset = DictPointwiseDataset(

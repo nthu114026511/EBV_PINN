@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from sympy import Symbol, Number, Function, StrictLessThan, sqrt
+from sympy import Symbol, Number, Function, StrictLessThan, sqrt, exp, log
 from physicsnemo.sym.eq.pde import PDE
 
 import physicsnemo.sym
@@ -101,11 +101,29 @@ def run(cfg: PhysicsNeMoConfig) -> None:
         def __init__(self, r=0.10, K=5.0, sigma0=0.01, k12=0.05, kc=0.15, time_scale=1.0):
             x = Symbol("x")
             input_variables = {"x": x}
-            B = Function("B")(*input_variables)
-            R = Function("R")(*input_variables)
-            E = Function("E")(*input_variables)
+            
+            # --- raw NN outputs (symbolic) ---
+            B_raw = Function("B")(*input_variables)
+            R_raw = Function("R")(*input_variables)
+            E_raw = Function("E")(*input_variables)
+
+            # --- nonneg transforms (all SymPy-safe) ---
+            beta_sp = Number(4.0)         # softplus 陡峭度，2~6 皆可
+            eps_pos = Number(1e-8)        # 避免 log/除零
+
+            def softplus_sym(z):
+                # log(1 + exp(beta*z)) / beta + eps
+                return log(1 + exp(beta_sp*z)) / beta_sp + eps_pos
+
+            def sigmoid_sym(z):
+                return 1 / (1 + exp(-z))
 
             r, K, s0, k12, kc, ts = map(Number, (r, K, sigma0, k12, kc, time_scale))
+
+            # B ∈ [0, K]，R,E ≥ 0
+            B = K * sigmoid_sym(B_raw)               # 0..K
+            R = softplus_sym(R_raw)                  # ≥0
+            E = softplus_sym(E_raw)                  # ≥0
 
             eps = Number(1e-8)  # 防止除 0
             # 原始殘差

@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from sympy import Symbol, Number, Function, StrictLessThan, sqrt, exp, log
+from sympy import Symbol, Number, Function, sqrt, exp, log
 from physicsnemo.sym.eq.pde import PDE
 from typing import Sequence
 import physicsnemo.sym
@@ -50,14 +50,14 @@ def run(cfg: PhysicsNeMoConfig) -> None:
 
     # 事件與硬約束
     t_js_original = (10.0, 20.0, 40.0)  # 原始時間（單位：天）
-    t_js: Sequence[float] = tuple((t - t_0) / time_scale for t in t_js_original)  # 轉換為縮放時間 [0, 1]
+    t_js: Sequence[float] = tuple((t - t_0) / time_scale for t in t_js_original)  # 縮放到 [0, 1]
     d_js: Sequence[float] = (1.5, 1.5, 1.5)  # 劑量序列
     alpha: float = 0.30  # SF = exp(-alpha*d - beta*d^2)
     beta: float = 0.03
     sigma1: float = 0.20
-    kappa: float = 30.0  # 初值不再直接使用，退火時會被覆蓋
-    mask_eps = 0.01  # ε：遮罩半寬
-    
+    kappa: float = 50.0  # 供平滑階梯 H_k 使用
+    mask_eps = 0.01      # ε：事件半寬（同時用於 ODE 凹槽與 data 啟用）
+
     # 初始條件
     B0 = 0.05
     R0 = 0.0
@@ -65,17 +65,38 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # ========================================
     
     class CustomODE(PDE):
+        """
+        這裡的 equations 對應 L_ode（連續區域）。
+        透過 w(t)=∏(1-exp(-((t-t_j)^2)/(2ε^2))) 在事件附近把 ODE 殘差壓到 0。
+        """
         def __init__(self, r, K, sigma0, k12, kc, time_scale,
                      t_js, d_js, alpha, beta, sigma1, kappa, mask_eps):
-            x = Symbol("x")
+            x = Symbol("x")  # x ≡ t_s
             input_variables = {"x": x}
-            B_bar = Function("B")(*input_variables)
-            R_bar = Function("R")(*input_variables)
-            E_bar = Function("E")(*input_variables)
+            # --- raw NN outputs (symbolic) ---
+            B_raw = Function("B")(*input_variables)
+            R_raw = Function("R")(*input_variables)
+            E_raw = Function("E")(*input_variables)
+
+            # --- nonneg transforms (all SymPy-safe) ---
+            beta_sp = Number(4.0)         # softplus 陡峭度，2~6 皆可
+            eps_pos = Number(1e-8)        # 避免 log/除零
+
+            def softplus_sym(z):
+                # log(1 + exp(beta*z)) / beta + eps
+                return log(1 + exp(beta_sp*z)) / beta_sp + eps_pos
+
+            def sigmoid_sym(z):
+                return 1 / (1 + exp(-z))
+
+            # B ∈ [0, K]，R,E ≥ 0
+            B_core = K * sigmoid_sym(B_raw)               # 0..K
+            R_core = softplus_sym(R_raw)                  # ≥0
+            E_core = softplus_sym(E_raw)                  # ≥0
 
             r, K, s0, k12, kc, ts = map(Number, (r, K, sigma0, k12, kc, time_scale))
 
-            # 平滑階躍
+            # 平滑階躍 H_k
             kappa_ = Number(kappa)
             def H_kappa(tau):
                 return 1 / (1 + exp(-kappa_ * tau))
@@ -85,44 +106,37 @@ def run(cfg: PhysicsNeMoConfig) -> None:
             beta_ = Number(beta)
             SF_list = [exp(-alpha_ * Number(d) - beta_ * Number(d)**2) for d in d_js]
 
-            # --- 生存率與階梯 ---
+            # H_k(t - t_j)
             H_list  = [H_kappa(x - Number(tj)) for tj in t_js]
             logSF   = [log(sf) for sf in SF_list]
 
-            # M(t)
-            H_list = [H_kappa(x - Number(tj)) for tj in t_js]
-            logSF  = [log(sf) for sf in SF_list]
+            # M(t) 與 R 的事件型態（保持 Step 3 的結構）
             M = exp(sum(l * Hj for l, Hj in zip(logSF, H_list)))
+            # --- apply jump embedding ---
+            B = M * B_core
+            R = R_core + Number(sigma1) * sum((1 - sf) * B_core * Hj for sf, Hj in zip(SF_list, H_list))
+            E = E_core
 
-            B = M * B_bar
-            R = R_bar + Number(sigma1) * sum(
-                (1 - sf) * B_bar * Hj for sf, Hj in zip(SF_list, H_list)
-            )
-            E = E_bar
+            eps = Number(1e-8)  # 防除 0
 
-            eps = Number(1e-8)  # 防止除 0
-
-            # 殘差（x≡t_s）
+            # --- ODE 殘差（縮放時間 x=t_s）---
             resB = B.diff(x) - ts * r * B * (1 - B/K)
             resR = R.diff(x) - ts * (s0 * B - k12 * R)
             resE = E.diff(x) - ts * (k12 * R - kc * E)
 
-            # Step 3: 事件遮罩 w(t)
+            # --- 事件凹槽遮罩：事件附近 → 0；事件外 → 1 ---
             eps_mask = Number(mask_eps)
-            def mask_one(arg):
-                # m_j(t) = 1 - exp(- ( (t - t_j)^2 / (2 eps^2) ))
+            def notch(arg):  # 1 - exp(-Δ^2/(2ε^2))
                 return 1 - exp(- (arg**2) / (2 * eps_mask**2))
-            
             w = Number(1.0)
             for tj in t_js:
-                w = w * mask_one(x - Number(tj))
-            
-            # 對殘差施加遮罩
+                w = w * notch(x - Number(tj))
+            # 只在連續區域累積殘差
             resB = w * resB
             resR = w * resR
             resE = w * resE
 
-            # 相對殘差正規化尺度
+            # 相對殘差正規化
             B_scale = K
             R_scale = K * s0 / k12
             E_scale = K * s0 / kc
@@ -142,7 +156,7 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     x = Symbol("x")
     geo = Line1D(0.0, 1.0)
 
-    # --- 建構 PDE/Nodes（帶入固定 κ） ---
+    # --- PDE/Nodes ---
     ode = CustomODE(
         r=r_param, K=K_param, sigma0=sigma0_param, k12=k12_param, kc=kc_param,
         time_scale=time_scale, t_js=t_js, d_js=d_js,
@@ -153,100 +167,100 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # --- Domain 與約束 ---
     domain = Domain()
 
-    # 1) IC 權重放大
+    # 1) 初始條件（強化）
     IC = PointwiseBoundaryConstraint(
         nodes=nodes,
         geometry=geo,
         outvar={"B": B0, "R": R0, "E": E0},
-        lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},  # IC 強化
+        lambda_weighting={"B": 100.0, "R": 100.0, "E": 100.0},
         batch_size=cfg.batch_size.IC,
         parameterization={x: 0.0},
     )
     domain.add_constraint(IC, "IC")
 
-    # 2) 內點殘差配重（R/E 比 B 重）
+    # 2) 內點殘差（L_ode，事件外）
     wB, wR, wE = 1.0, 5.0, 5.0
-    interior_total = cfg.batch_size.interior
     interior = PointwiseInteriorConstraint(
         nodes=nodes,
         geometry=geo,
         outvar={"ode_B": 0, "ode_R": 0, "ode_E": 0},
         lambda_weighting={"ode_B": wB, "ode_R": wR, "ode_E": wE},
-        batch_size=interior_total,
+        batch_size=cfg.batch_size.interior,
     )
     domain.add_constraint(interior, "interior")
 
-    # ========== 讀取 CSV 數據作為 Data Loss ==========
-    # 使用絕對路徑，避免 Hydra 改變工作目錄後找不到檔案
+    # ========== L_data：只在事件點附近啟用的 Data Loss ==========
     csv_path = os.path.join(os.path.dirname(__file__), "evb_training_data_jump.csv")
     df = pd.read_csv(csv_path)
     print(f"[INFO] Loaded CSV from: {csv_path}")
     
-    # CSV 欄位：t, B, R, E
-    # t 是原始時間 [0, 60]，需要轉換為縮放時間 t_s ∈ [0, 1]
-    t_original = df['t'].values
-    t_scaled = (t_original - t_0) / (t_f - t_0)  # 轉換為 [0, 1]
+    # CSV 欄位：t, B, R, E（t 為原始時間 [0, 60]）
+    t_original = df["t"].values
+    t_scaled = (t_original - t_0) / (t_f - t_0)  # -> [0, 1]
 
-    # 取得對應的 B, R, E 數值
-    B_csv = df['B'].values
-    R_csv = df['R'].values
-    E_csv = df['E'].values
+    B_true = df["B"].values[:, None]
+    R_true = df["R"].values[:, None]
+    E_true = df["E"].values[:, None]
+    X_flat = t_scaled[:, None]
 
-    # 準備數據格式
-    X_flat = t_scaled[:, None]  # shape=(n_points, 1)
-    B_true = B_csv[:, None]     # shape=(n_points, 1)
-    R_true = R_csv[:, None]     # shape=(n_points, 1)
-    E_true = E_csv[:, None]     # shape=(n_points, 1)
+    # ---- 事件權重：w_data(t) = 1 - w_ode(t) ----
+    # w_ode(t) 與 PDE 中的 w(t) 同型：事件外≈1、事件近≈0
+    def gaussian_notch(ts, tj, eps):
+        return 1.0 - np.exp(-((ts - tj) ** 2) / (2.0 * eps ** 2))
+    w_ode_np = np.ones_like(t_scaled, dtype=np.float64)
+    for tj in t_js:
+        w_ode_np *= gaussian_notch(t_scaled, tj, mask_eps)
+    w_data_np = 1.0 - w_ode_np  # 事件近≈1，其它≈0
 
-    # Build invar and outvar
-    invar_numpy = {   # dict of input variables
-        "x": X_flat,  # shape=(n_points, 1)
-    }
-    outvar_numpy = {  # dict of output variables
-        "B": B_true,  # shape=(n_points, 1)
-        "R": R_true,  # shape=(n_points, 1)
-        "E": E_true,  # shape=(n_points, 1)
-    }
+    # （可選）把事件窗外的小尾巴截 0，讓更乾脆
+    w_data_np[w_data_np < 1e-3] = 0.0
 
-    # 使用 PointwiseConstraint 將 CSV 數據添加為訓練約束創建數據集
+    # 統計一下事件加權覆蓋率方便 debug
+    coverage = float((w_data_np > 0).sum()) / float(w_data_np.size)
+    print(f"[INFO] L_data active ratio: {coverage:.2%} of CSV samples")
+
+    invar_numpy = {"x": X_flat}
+    outvar_numpy = {"B": B_true, "R": R_true, "E": E_true}
+
+    # 僅在事件附近啟用 data loss（權重隨 w_data_np 而動）
     data_B_weight = 5.0
     data_R_weight = 5.0
     data_E_weight = 5.0
     data_batch_size = 64
-    
+
+    lambda_weighting = {
+        "B": (data_B_weight * w_data_np)[:, None],
+        "R": (data_R_weight * w_data_np)[:, None],
+        "E": (data_E_weight * w_data_np)[:, None],
+    }
+
     dataset = DictPointwiseDataset(
         invar=invar_numpy,
         outvar=outvar_numpy,
-        lambda_weighting={
-            "B": np.full((len(X_flat), 1), data_B_weight),
-            "R": np.full((len(X_flat), 1), data_R_weight),
-            "E": np.full((len(X_flat), 1), data_E_weight),
-        },
+        lambda_weighting=lambda_weighting,
     )
 
-    # 創建數據約束
     data_constraint = PointwiseConstraint(
         nodes=nodes,
         dataset=dataset,
         batch_size=data_batch_size,
-        loss=PointwiseLossNorm(),  # 使用標準點式損失
-        shuffle=True,  # 打亂數據順序
-        drop_last=True,  # 使用 CUDA graphs 時必須為 True
-        num_workers=0,  # 避免多進程問題
+        loss=PointwiseLossNorm(),  # L2
+        shuffle=True,
+        drop_last=True,  # CUDA graphs 要求
+        num_workers=0,
     )
     domain.add_constraint(data_constraint, "data_constraint")
 
     # ========== 驗證器 ==========
     _plotter = None
-    if cfg.run_mode == 'eval':
+    if cfg.run_mode == "eval":
         _plotter = CustomValidatorPlotter()
 
-    # 使用所有數據點進行驗證（不使用 batch）
     validator = PointwiseValidator(
-        nodes=nodes, 
-        invar=invar_numpy, 
-        true_outvar=outvar_numpy, 
-        batch_size=len(X_flat),  # 驗證時使用所有數據點
+        nodes=nodes,
+        invar=invar_numpy,
+        true_outvar=outvar_numpy,
+        batch_size=len(X_flat),
         plotter=_plotter,
     )
     domain.add_validator(validator)
@@ -257,36 +271,23 @@ def run(cfg: PhysicsNeMoConfig) -> None:
     # start solver
     slv.solve()
     
-    # 訓練完成後，自動執行評估並生成對比圖
-    if cfg.run_mode == 'train':
-        print("\n" + "="*60)
+    # 訓練完成後：繪圖
+    if cfg.run_mode == "train":
+        print("\n" + "=" * 60)
         print("Training completed! Now generating comparison plots...")
-        print("="*60 + "\n")
-        
-        # 創建繪圖器並執行評估
+        print("=" * 60 + "\n")
         plotter = CustomValidatorPlotter()
-        
-        # 從訓練好的模型獲取預測值
-        import torch
         pred_outvar = {}
         with torch.no_grad():
-            # 將 numpy 數據轉換為 torch tensor
-            invar_torch = {k: torch.tensor(v, dtype=torch.float32, device=slv.device) 
-                          for k, v in invar_numpy.items()}
-            
-            # 使用 FC 網絡進行預測
+            invar_torch = {k: torch.tensor(v, dtype=torch.float32, device=slv.device)
+                           for k, v in invar_numpy.items()}
             pred_dict = FC(invar_torch)
-            
-            # 轉換回 numpy
             for key in pred_dict:
                 pred_outvar[key] = pred_dict[key].detach().cpu().numpy()
-        
-        # 生成對比圖
         plotter(invar_numpy, outvar_numpy, pred_outvar)
 
 if __name__ == "__main__":
     start_time = time.time()
     run()
     end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"Total training time: {elapsed_time:.2f} seconds")
+    print(f"Total training time: {end_time - start_time:.2f} seconds")
