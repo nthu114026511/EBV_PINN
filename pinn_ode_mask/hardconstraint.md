@@ -6,7 +6,7 @@
 
 $$M(t) = \exp\left(\sum_j (\log SF_j) H_\kappa(t - t_j)\right), \quad B(t) = M(t) \underline{B}(t), \tag{2.2}$$
 
-$$\Delta B_j = B(t_j^-) - B(t_j^+) = M(t_j^-)\underline{B}(t_j^-)[1 - SF_j], \tag{2.3}$$
+$$\Delta B_j = B(t_j^-) - B(t_j^+) = \underline{B}(t_j^-)[1 - SF_j], \tag{2.3}$$
 
 $$R(t) = \underline{R}(t) + \sigma_1 \sum_j \Delta B_j H_\kappa(t - t_j), \tag{2.4}$$
 
@@ -58,7 +58,7 @@ $$M(t) = \exp\left(\sum_j (\log SF_j)H_\kappa(t - t_j)\right), \tag{2.4}$$
 
 $$B(t) = M(t)\underline{B}(t), \tag{2.5}$$
 
-$$\Delta B_j = B(t_j^-) - B(t_j^+) = M(t_j^-)\underline{B}(t_j^-)[1 - SF_j], \tag{2.6}$$
+$$\Delta B_j = B(t_j^-) - B(t_j^+) = \underline{B}(t_j^-)[1 - SF_j], \tag{2.6}$$
 
 $$R(t) = \underline{R}(t) + \sigma_1 \sum_j \Delta B_j H_\kappa(t - t_j), \tag{2.7}$$
 
